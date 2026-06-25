@@ -34,12 +34,10 @@ The requirements are detailed in the `pyproject.toml` file for Python 3.12 versi
 
 Local installation in virtual environment:
 ```bash
+git lfs pull
 uv sync
 source .venv/bin/activate
 ```
-
-Installation from source:
-```pip install git+https://github.com/SAP-samples/flextab.git```
 
 ## Basic Usage
 
