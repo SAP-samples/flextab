@@ -1,5 +1,3 @@
-from abc import ABC, abstractmethod
-
 import torch
 from torch import nn
 from torch.nn.functional import gelu
@@ -173,7 +171,7 @@ class TorchAttention(nn.Module):
         return self.output(self_outputs, hidden_states)
 
 
-class _SelfAttention(ABC, nn.Module):
+class TorchSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -194,14 +192,6 @@ class _SelfAttention(ABC, nn.Module):
 
         self.dropout = config.attention_probs_dropout_prob
 
-    @abstractmethod
-    def forward(
-        self, hidden_states: torch.Tensor, num_to_attend: int, kv: torch.Tensor = None, attn_mask: torch.Tensor = None
-    ) -> torch.Tensor:
-        pass
-
-
-class TorchSelfAttention(_SelfAttention):
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)

@@ -1,5 +1,4 @@
 import os
-import pathlib
 from typing import List
 
 import numpy as np
@@ -14,18 +13,12 @@ class SentenceEmbedder:
     def __init__(self, sentence_embedding_model_name, batch_size=256, device=None):
         super().__init__()
         self.sentence_embedding_model_name = sentence_embedding_model_name
-        if sentence_embedding_model_name == 'sentence-transformers/all-MiniLM-L6-v2':
-            model_path = pathlib.Path(__file__).parent.parent / 'model/all-MiniLM-L6-v2'
-            kwargs = {'local_files_only': True}
-        else:
-            model_path = sentence_embedding_model_name
-            kwargs = {}
-        self.model = AutoModel.from_pretrained(model_path, **kwargs)
+        self.model = AutoModel.from_pretrained(sentence_embedding_model_name)
         self.embedding_dimension = text_embedding_model_properties[sentence_embedding_model_name]['dimension']
         self.pooling_method = text_embedding_model_properties[sentence_embedding_model_name]['pooling']
         self.batch_size = batch_size
         os.environ['TOKENIZERS_PARALLELISM'] = 'true'
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True, **kwargs)
+        self.tokenizer = AutoTokenizer.from_pretrained(sentence_embedding_model_name, use_fast=True)
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

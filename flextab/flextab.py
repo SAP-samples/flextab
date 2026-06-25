@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import pathlib
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -13,12 +12,11 @@ from sklearn.utils.validation import check_is_fitted
 
 from flextab.constants import TaskType
 from flextab.data.collate import collate_stack
-from flextab.data.tokenizer import InferenceTokenizer
+from flextab.data.tokenizer import Tokenizer
 from flextab.exceptions import FlexTabInputValidationError
 from flextab.model.gpu_utils import retry_on_cuda_oom
 from flextab.model.torch_model import FlexTab
 from flextab.utils.to_device import to_device
-
 
 HERE = pathlib.Path(__file__).parent
 DEFAULT_CKPT_PATH = HERE / 'ckpt.pt'
@@ -72,7 +70,7 @@ class FlexTabModel(BaseEstimator):
         self.model.load_weights(state_dict, self.device)
         self.seed = 42
         self.is_drop_constant_columns = is_drop_constant_columns
-        self.tokenizer = InferenceTokenizer(
+        self.tokenizer = Tokenizer(
             random_seed=self.seed, sentence_embedder_batch_size=sentence_embedder_batch_size, is_valid=True
         )
         self.model.to(self.device).eval()
@@ -530,7 +528,7 @@ class FlexTabEmbedder(BaseEstimator):
         self.model.load_weights(state_dict, self.device)
         self.model.to(self.device).eval()
 
-        self.tokenizer = InferenceTokenizer(
+        self.tokenizer = Tokenizer(
             random_seed=self.seed, sentence_embedder_batch_size=sentence_embedder_batch_size, is_valid=True
         )
 

@@ -1,6 +1,5 @@
 import datetime
 import os
-from abc import ABC, abstractmethod
 from typing import Collection, Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -21,18 +20,23 @@ from flextab.exceptions import FlexTabValueError
 from flextab.utils.lru_cache import LRU_Cache
 
 
-class Tokenizer(ABC):
+class Tokenizer:
     sentence_embedding_model_name = 'sentence-transformers/all-MiniLM-L6-v2'
     embedding_dim = text_embedding_model_properties[sentence_embedding_model_name]['dimension']
 
-    def __init__(self, random_seed=None, is_valid=False, is_drop_constant_columns=True):
+    def __init__(
+        self, random_seed=None, is_valid=False, is_drop_constant_columns=True, sentence_embedder_batch_size: int = 512
+    ):
         self.random_seed = random_seed
         self.is_valid = is_valid
         self.is_drop_constant_columns = is_drop_constant_columns
 
-    @abstractmethod
-    def texts_to_embeddings_dict(self, texts: Collection[str]) -> Tuple[dict[str, int], torch.Tensor]:
-        pass
+        self.sentence_embedder = SentenceEmbedder(
+            self.sentence_embedding_model_name,
+            batch_size=sentence_embedder_batch_size,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+        )
+        self.cache = LRU_Cache(max_size=int(os.getenv('LRU_CACHE_SIZE', 100_000)))
 
     def texts_to_tensor(
         self, texts: Collection[str], text_to_idx: Dict[str, int], text_embeddings: torch.Tensor
@@ -342,20 +346,6 @@ class Tokenizer(ABC):
 
         data = self.process_features(X_context, X_query, data, text_to_idx, text_embeddings)
         return data, all_label_classes
-
-
-class InferenceTokenizer(Tokenizer):
-    def __init__(
-        self, random_seed=None, is_valid=False, is_drop_constant_columns=True, sentence_embedder_batch_size: int = 512
-    ):
-        super().__init__(random_seed, is_valid, is_drop_constant_columns)
-
-        self.sentence_embedder = SentenceEmbedder(
-            self.sentence_embedding_model_name,
-            batch_size=sentence_embedder_batch_size,
-            device='cuda' if torch.cuda.is_available() else 'cpu',
-        )
-        self.cache = LRU_Cache(max_size=int(os.getenv('LRU_CACHE_SIZE', 100_000)))
 
     def texts_to_embeddings_dict(self, texts: Collection[str]) -> Tuple[dict[str, int], torch.Tensor]:
         # We sort them by length, so that the tokenizer can batch them efficiently
