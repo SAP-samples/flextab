@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flextab"
+version = "0.1.0"
+description = "FlexTab: A flexible tabular foundation model for classification, regression and matching."
+readme = "README.md"
+requires-python = "==3.12.*"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "SAP SE" },
+]
+dependencies = [
+    "pandas>=1.3,<3",
+    "pyarrow<24",
+    "scikit-learn>=1.1,<2",
+    "transformers>=4.30,<5",
+    "torch==2.10.0",
+    "torcheval>=0.0.6,<1",
+    "sentence-transformers",
+    "pathvalidate",
+    "pytest-asyncio",
+    "setuptools==82.0.1",
+    "protobuf>=3.19,<5",
+    "pre-commit",
+]
+
+[project.optional-dependencies]
+test = [
+    "numpy",
+    "scipy",
+    "recordlinkage",
+]
+
+[project.urls]
+Repository = "https://github.com/SAP-samples/flextab"
+
+[tool.setuptools.packages.find]
+include = ["flextab*"]
+
+[tool.setuptools.package-data]
+flextab = ["*.pt"]
+
+[tool.ruff]
+target-version = "py312"
+indent-width = 4
+line-length = 120
+output-format = "full"
+exclude = [
+    "scripts/databricks_notebooks",
+]
+
+[tool.ruff.format]
+# Use single quotes for strings.
+quote-style = "single"
+
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"
+
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+
+
+[tool.ruff.lint]
+# Enable all `pydocstyle` rules, limiting to those that adhere to the
+# Google convention via `convention = "google"`, below.
+select = ["D", "E4", "E7", "E9", "F"]
+
+# On top of the Google convention, disable `D417`, which requires
+# documentation for every function parameter.
+# Also, disable dicstring enforcer for public classes and functions
+ignore = ["D417", "D100", "D101", "D102", "D104", "D105", "D103", "D107", "D205", "D415", "E731", "E741"]
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.isort]
+known-first-party = ["gpt4hana_base"]
+combine-as-imports = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
