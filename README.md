@@ -19,7 +19,7 @@ If you use this model in your research or want to refer to our work, please cite
 @inproceedings{
     flextab,
     title={{FlexTab}: Towards a Flexible Encoder-Decoder Architecture for Tabular In-Context Learning},
-    author={Marek Polewczyk and Maximilian Schambach and Marco Spinaci and Sam Thelin and and Johannes Höhne},
+    author={Marek Polewczyk and Maximilian Schambach and Marco Spinaci and Sam Thelin and Johannes Höhne},
     booktitle={ICML 2026 Second Foundation Models for Structured Data Workshop},
     year={2026},
     url={https://openreview.net/forum?id=fOph6xxdyP}
