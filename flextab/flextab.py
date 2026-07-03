@@ -6,6 +6,7 @@ import pathlib
 import numpy as np
 import pandas as pd
 import torch
+from huggingface_hub import hf_hub_download
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_is_fitted
@@ -19,8 +20,7 @@ from flextab.model.torch_model import FlexTab
 from flextab.utils.to_device import to_device
 
 HERE = pathlib.Path(__file__).parent
-DEFAULT_CKPT_PATH = HERE / 'ckpt.pt'
-DEFAULT_MATCHING_CKPT_PATH = HERE / 'ckpt_matching.pt'
+HF_REPO_ID = 'SAP/FlexTab'
 logger = logging.getLogger(__name__)
 
 
@@ -36,16 +36,14 @@ class FlexTabModel(BaseEstimator):
 
     def __init__(
         self,
-        checkpoint: str | pathlib.Path | None = DEFAULT_CKPT_PATH,
+        checkpoint: str = 'ckpt.pt',
         bagging: int = 8,
         max_context_size: int = 8192,
         is_drop_constant_columns: bool = True,
         sentence_embedder_batch_size: int = 512,
         device: str | None = None,
     ):
-        if checkpoint is None:
-            checkpoint = DEFAULT_CKPT_PATH
-        self.checkpoint = checkpoint
+        self.checkpoint = hf_hub_download(repo_id=HF_REPO_ID, filename=checkpoint)
         self.bagging = bagging
         self.max_context_size = max_context_size
         logger.info(f'Using max_context_size={max_context_size}')
@@ -55,7 +53,7 @@ class FlexTabModel(BaseEstimator):
         else:
             self.device = torch.device(device)
         # Load weights first to know how to embed the numbers
-        state_dict = torch.load(checkpoint, map_location=self.device, weights_only=True)
+        state_dict = torch.load(self.checkpoint, map_location=self.device, weights_only=True)
 
         self.model = FlexTab()
         if torch.cuda.is_available():
@@ -311,15 +309,13 @@ class FlexTabMatcher(FlexTabClassifier):
 
     def __init__(
         self,
-        checkpoint: str | pathlib.Path | None = DEFAULT_MATCHING_CKPT_PATH,
+        checkpoint: str = 'ckpt_matching.pt',
         bagging: int = 8,
         max_context_size: int = 8192,
         is_drop_constant_columns: bool = True,
         sentence_embedder_batch_size: int = 512,
         **kwargs,
     ):
-        if checkpoint is None:
-            checkpoint = DEFAULT_MATCHING_CKPT_PATH
         super().__init__(
             checkpoint=checkpoint,
             bagging=bagging,
@@ -501,22 +497,20 @@ class FlexTabEmbedder(BaseEstimator):
 
     def __init__(
         self,
-        checkpoint: str | pathlib.Path | None = DEFAULT_CKPT_PATH,
+        checkpoint: str = 'ckpt_matching.pt',
         max_context_size: int = 8192,
         is_drop_constant_columns: bool = True,
         sentence_embedder_batch_size: int = 512,
         seed: int = 42,
     ):
-        if checkpoint is None:
-            checkpoint = DEFAULT_CKPT_PATH
-        self.checkpoint = checkpoint
+        self.checkpoint = hf_hub_download(repo_id=HF_REPO_ID, filename=checkpoint)
         self.max_context_size = max_context_size
         self.is_drop_constant_columns = is_drop_constant_columns
         self.sentence_embedder_batch_size = sentence_embedder_batch_size
         self.seed = seed
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        state_dict = torch.load(checkpoint, map_location=self.device, weights_only=True)
+        state_dict = torch.load(self.checkpoint, map_location=self.device, weights_only=True)
 
         self.model = FlexTab()
         if torch.cuda.is_available():
