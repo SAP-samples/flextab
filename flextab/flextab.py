@@ -36,7 +36,7 @@ class FlexTabModel(BaseEstimator):
 
     def __init__(
         self,
-        checkpoint: str = 'ckpt.pt',
+        checkpoint: str = 'flextab_v1_0_0.pt',
         bagging: int = 8,
         max_context_size: int = 8192,
         is_drop_constant_columns: bool = True,
@@ -309,7 +309,7 @@ class FlexTabMatcher(FlexTabClassifier):
 
     def __init__(
         self,
-        checkpoint: str = 'ckpt_matching.pt',
+        checkpoint: str = 'flextab_matching_v1_0_0.pt',
         bagging: int = 8,
         max_context_size: int = 8192,
         is_drop_constant_columns: bool = True,
@@ -497,7 +497,7 @@ class FlexTabEmbedder(BaseEstimator):
 
     def __init__(
         self,
-        checkpoint: str = 'ckpt_matching.pt',
+        checkpoint: str = 'flextab_matching_v1_0_0.pt',
         max_context_size: int = 8192,
         is_drop_constant_columns: bool = True,
         sentence_embedder_batch_size: int = 512,
