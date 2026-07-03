@@ -28,15 +28,20 @@ If you use this model in your research or want to refer to our work, please cite
 
 ## Requirements
 
-This project uses model checkpoints available on git-lfs, that are automatically downloaded if git-lfs is installed.
+This project uses model checkpoints available on https://huggingface.co/SAP/FlexTab that are automatically downloaded when running the model.
+Note that downloading the model checkpoints requires logging in to Hugging Face. See the [instructions](https://huggingface.co/docs/huggingface_hub/quick-start#authentication) for details.
 
 The requirements are detailed in the `pyproject.toml` file for Python 3.12 version.
 
 Local installation in virtual environment:
 ```bash
-git lfs pull
 uv sync
 source .venv/bin/activate
+```
+
+Installation from source:
+```bash
+pip install git+https://github.com/SAP-samples/flextab
 ```
 
 ## Basic Usage

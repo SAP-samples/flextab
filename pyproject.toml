@@ -25,6 +25,7 @@ dependencies = [
     "setuptools==82.0.1",
     "protobuf>=3.19,<5",
     "pre-commit",
+    "huggingface_hub>=0.20",
 ]
 
 [project.optional-dependencies]

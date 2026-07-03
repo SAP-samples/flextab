@@ -49,16 +49,8 @@ def test_regression():
 
 def test_matching():
     from flextab import FlexTabMatcher
-    from flextab.flextab import DEFAULT_MATCHING_CKPT_PATH
 
     print('\nMATCHING')
-
-    if not DEFAULT_MATCHING_CKPT_PATH.exists():
-        print(
-            f'Skipping matching smoke test: {DEFAULT_MATCHING_CKPT_PATH} not found. '
-            'See README for how to obtain the matching checkpoint.'
-        )
-        return
 
     left_train, left_test, right_train, right_test, y_train, y_test = load_febrl4()
 
