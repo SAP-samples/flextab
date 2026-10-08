@@ -34,3 +34,5 @@ class TaskType(StrEnum):
     CLASSIFICATION = 'classification'
     REGRESSION = 'regression'
     MATCHING = 'matching'
+    ANOMALY_DETECTION = 'anomaly_detection'
+    CLUSTERING = 'clustering'

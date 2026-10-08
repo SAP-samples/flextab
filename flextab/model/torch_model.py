@@ -251,3 +251,63 @@ class FlexTab(nn.Module):
         # Targets are by construction identical between the two sides; use one.
         decoder_outputs = self.forward_decoder(target_left, encoder_outputs, num_context_rows)
         return self.heads(decoder_outputs[:, num_context_rows:, -1], is_regression=False)
+
+
+class OutlierHead(nn.Module):
+    def __init__(self, config: FlexTabConfig):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.output_head = RoundUpTo8LinearLayer(config.hidden_size, 1)
+
+    def forward(self, encoder_outputs: torch.Tensor, is_regression: bool = False):
+        out = self.dense(encoder_outputs)
+        out = F.gelu(out)
+        return self.output_head(out)
+
+
+class FlexTabClustering(FlexTab):
+    def __init__(self, clustering_out_dim: int = 64, **kwargs):
+        super().__init__(**kwargs)
+        self.clustering_out_dim = clustering_out_dim
+        self.decoder_head = nn.Sequential(
+            nn.Linear(self.config.hidden_size, self.config.hidden_size * 4),
+            nn.GELU(),
+            nn.Linear(self.config.hidden_size * 4, clustering_out_dim),
+        )
+        del self.embeddings.is_missing_target_reg
+
+    def construct_heads(self):
+        # Do not construct any head here, it's called self.decoder_head...
+        return None
+
+    def forward(self, data: dict[str, torch.Tensor], num_context_rows: int, **kwargs) -> torch.Tensor:
+        feature_embeddings, target_embeddings = self.apply_embeddings(data, TaskType.CLASSIFICATION)
+        encoder_outputs = self.forward_encoder(feature_embeddings, num_context_rows)
+        decoder_outputs = self.forward_decoder(target_embeddings, encoder_outputs, num_context_rows)
+        h = decoder_outputs[:, :, -1, :]  # (batch, num_rows, hidden_size)
+        out = self.decoder_head(h)
+        return F.normalize(out, p=2, dim=-1)
+
+
+class FlexTabAD(FlexTab):
+    """Anomaly-detection variant of the FlexTab architecture.
+    Uses label embeddings (0=inlier, 1=outlier, 2=unlabelled) as the decoder query,
+    and a binary BCE head instead of the classification/regression head.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # label_embedding: 0=inlier, 1=outlier, 2=unlabelled
+        self.label_embedding = nn.Embedding(3, self.config.hidden_size)
+        nn.init.normal_(self.label_embedding.weight, std=1.0)
+        nn.init.normal_(self.row_token, std=1)
+
+    def construct_heads(self) -> nn.Module:
+        return OutlierHead(self.config)
+
+    def apply_embeddings(self, data: dict[str, torch.Tensor], task_type: TaskType) -> tuple[torch.Tensor, torch.Tensor]:
+        feature_embeddings = self.embeddings(data, task_type=TaskType.ANOMALY_DETECTION)
+        target_ids = data['target'].long()
+        target_ids = torch.where(target_ids < 0, torch.full_like(target_ids, 2), target_ids).clamp(0, 2)
+        target_embeddings = self.label_embedding(target_ids).unsqueeze(2)  # (batch_size, num_rows, 1, hidden_size)
+        return feature_embeddings, target_embeddings

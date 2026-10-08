@@ -1,16 +1,16 @@
 # FlexTab
-[![arXiv](https://img.shields.io/badge/arXiv-2506.10707-G.svg)](https://openreview.net/forum?id=fOph6xxdyP) [![REUSE status](https://api.reuse.software/badge/github.com/SAP-samples/flextab)](https://api.reuse.software/info/github.com/SAP-samples/flextab)
+[![arXiv](https://img.shields.io/badge/arXiv-2506.10707-G.svg)](https://arxiv.org/abs/2606.30336) [![REUSE status](https://api.reuse.software/badge/github.com/SAP-samples/flextab)](https://api.reuse.software/info/github.com/SAP-samples/flextab)
 
 
 ## Description
 
-Implementation of the deep learning models with the inference pipeline described in the paper ["FlexTab: Towards a Flexible Encoder-Decoder Architecture for Tabular In-Context Learning"](https://openreview.net/forum?id=fOph6xxdyP).
+Implementation of the deep learning models with the inference pipeline described in the paper ["FlexTab: A Flexible Encoder-Decoder Architecture for In-Context Learning Across Diverse Tabular Tasks"](https://arxiv.org/abs/2606.30336).
 
 ![logo](./architecture.png)
 
 ## Abstract
 
-We introduce FlexTab, a flexible encoder-decoder architecture for in-context learning on tabular data that combines a single, task-agnostic encoder with a suite of task-specific decoders. Unlike existing tabular in-context learners, which entangle feature representations with a specific prediction target, our design produces target-agnostic row embeddings that can be leveraged across a range of downstream tasks. We demonstrate this flexibility on three distinct tasks: classification, regression, and entity matching. We note that our architecture can be extended to problems such as outlier detection, clustering, and entity classification in relational databases, among others. Both the encoder and the task-specific decoders are trained on a large corpus of real-world, unlabeled tables. FlexTab achieves state-of-the-art or competitive performance across the examined tasks. Our results demonstrate that a single shared encoder, paired with task-specific decoders, can serve as an effective general-purpose backbone for diverse tabular prediction problems.
+We introduce FlexTab, a flexible encoder-decoder architecture for in-context learning on tabular data that pairs a single, task-agnostic encoder with a suite of task-specific decoders. Unlike existing tabular in-context learners, which entangle feature representations with a specific prediction target, our design produces target-agnostic row embeddings that can be leveraged across a wide range of downstream tasks within a table-native in-context learning setup. We demonstrate this flexibility on six distinct problems: classification, regression, anomaly detection, clustering, entity matching, and entity classification in relational databases. Both the encoder and the task-specific decoders are trained on a large corpus of real-world, unlabeled tables. FlexTab achieves state-of-the-art performance on classification, regression, anomaly detection and entity matching, while remaining competitive with specialized models on entity classification in a relational setting. These results demonstrate that a single shared encoder, paired with task-specific decoders, can serve as an effective general-purpose backbone for diverse tabular prediction problems. Model checkpoints are publicly available on [Hugging Face](https://huggingface.co/SAP/FlexTab).
 
 ## Citations
 
@@ -18,11 +18,11 @@ If you use this model in your research or want to refer to our work, please cite
 ```
 @inproceedings{
     flextab,
-    title={{FlexTab}: Towards a Flexible Encoder-Decoder Architecture for Tabular In-Context Learning},
+    title={{FlexTab}: A Flexible Encoder-Decoder Architecture for In-Context Learning Across Diverse Tabular Tasks},
     author={Marek Polewczyk and Maximilian Schambach and Marco Spinaci and Sam Thelin and Johannes Höhne},
-    booktitle={ICML 2026 Second Foundation Models for Structured Data Workshop},
+    booktitle={Advances in Neural Information Processing Systems},
     year={2026},
-    url={https://openreview.net/forum?id=fOph6xxdyP}
+    url={https://arxiv.org/abs/2606.30336}
 }
 ```
 
@@ -46,7 +46,7 @@ pip install git+https://github.com/SAP-samples/flextab
 
 ## Basic Usage
 
-The model supports classification, regression, and matching tasks. It accepts input data in the form of a pandas DataFrame or a NumPy array. No preprocessing is required, column names and cell values are automatically embedded using an LLM, and any missing values are handled correctly.
+The model supports classification, regression, matching, anomaly detection, clustering, and entity classification in relational databases tasks. It accepts input data in the form of a pandas DataFrame or a NumPy array. No preprocessing is required, column names and cell values are automatically embedded using an LLM, and any missing values are handled correctly.
 
 For best performance, use a GPU with at least 80 GB of memory and set the context size to 8192. For large tables, it is recommended to use a bagging factor of 8.
 
@@ -78,6 +78,23 @@ EMBEDDING
 Self-context shape: (30, 768)
 Context+query shape: (50, 768)
 Context invariance max diff: 0.00e+00
+
+ANOMALY DETECTION
+Unsupervised AUROC = 86.23%
+One-class AUROC = 97.73%
+Semi-supervised la=1% (1/114 annotated): FlexTab AUROC = 55.68%, FlexTab-AD AUROC = 72.88%
+Semi-supervised la=5% (5/114 annotated): FlexTab AUROC = 85.97%, FlexTab-AD AUROC = 93.71%
+Semi-supervised la=10% (11/114 annotated): FlexTab AUROC = 94.18%, FlexTab-AD AUROC = 96.76%
+Semi-supervised la=50% (57/114 annotated): FlexTab AUROC = 99.23%, FlexTab-AD AUROC = 99.59%
+Semi-supervised la=100% (114/114 annotated): FlexTab AUROC = 99.92%, FlexTab-AD AUROC = 99.82%
+
+CLUSTERING
+Hungarian Accuracy: 96.13%
+ARI: 85.01%
+
+MULTI-TABLE
+...
+FlexTab-Multi AUROC = 74.6% for Relbench dataset "rel-f1" task "driver-dnf"
 ```
 
 ### Classification
@@ -165,4 +182,6 @@ No known issues
 If you wish to contribute code, offer fixes or improvements, please send a pull request. Due to legal reasons, contributors will be asked to accept a DCO when they create the first pull request to this project. This happens in an automated fashion during the submission process. SAP uses [the standard DCO text of the Linux Foundation](https://developercertificate.org/).
 
 ## License
-Copyright (c) 2026 SAP SE or an SAP affiliate company. All rights reserved. This project is licensed under the Apache Software License, version 2.0 except as noted otherwise in the [LICENSE](LICENSE) file.
+Copyright (c) 2026 SAP SE or an SAP affiliate company. All rights reserved.
+
+The source code in this project is released under the Apache License 2.0 (see [LICENSE](LICENSE)). The model checkpoints are released under the CC-BY-NC-4.0 license.
