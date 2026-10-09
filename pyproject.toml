@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flextab"
 version = "0.1.0"
-description = "FlexTab: A flexible tabular foundation model for classification, regression and matching."
+description = "FlexTab: A flexible tabular foundation model for classification, regression, matching, anomaly detection, clustering, and multi-table tasks."
 readme = "README.md"
 requires-python = "==3.12.*"
 license = { text = "Apache-2.0" }
@@ -32,6 +32,7 @@ dependencies = [
 test = [
     "numpy",
     "scipy",
+    "relbench==2.1.2",
     "recordlinkage",
 ]
 

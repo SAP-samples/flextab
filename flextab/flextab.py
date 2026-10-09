@@ -2,22 +2,28 @@ from __future__ import annotations
 
 import logging
 import pathlib
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import torch
 from huggingface_hub import hf_hub_download
-from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
+from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin, TransformerMixin
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_is_fitted
+from tqdm import trange
 
 from flextab.constants import TaskType
 from flextab.data.collate import collate_stack
 from flextab.data.tokenizer import Tokenizer
 from flextab.exceptions import FlexTabInputValidationError
 from flextab.model.gpu_utils import retry_on_cuda_oom
-from flextab.model.torch_model import FlexTab
+from flextab.model.torch_model import FlexTab, FlexTabAD, FlexTabClustering
 from flextab.utils.to_device import to_device
+
+if TYPE_CHECKING:
+    from flextab.flextab_multi.relbench_data import RelbenchData
 
 HERE = pathlib.Path(__file__).parent
 HF_REPO_ID = 'SAP/FlexTab'
@@ -293,6 +299,450 @@ class FlexTabClassifier(ClassifierMixin, FlexTabModel):
 class FlexTabRegressor(RegressorMixin, FlexTabModel):
     def fit(self, X: pd.DataFrame, y: pd.Series):
         return super().fit(X, y, task_type=TaskType.REGRESSION)
+
+
+class FlexTabClusterer(TransformerMixin, BaseEstimator):
+    """Transductive clusterer using FlexTab.
+
+    fit(X, y=None): no-op (returns self). All of X serves as both context and query at transform time.
+    transform(X): returns L2-normalized embeddings for all rows in X, shape (n_rows, clustering_out_dim).
+    predict(X, n_clusters): transform(X) followed by K-means.
+    """
+
+    def __init__(
+        self,
+        checkpoint: str = 'flextab_clustering_v1_0_0.pt',
+        sentence_embedder_batch_size: int = 512,
+        max_context_size: int = 8192,
+        max_columns: int = 250,
+        seed: int = 42,
+    ):
+        self.checkpoint = hf_hub_download(repo_id=HF_REPO_ID, filename=checkpoint)
+        self.sentence_embedder_batch_size = sentence_embedder_batch_size
+        self.max_context_size = max_context_size
+        self.max_columns = max_columns
+        self.seed = seed
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        state_dict = torch.load(self.checkpoint, map_location=self.device, weights_only=True)
+
+        decoder_head_key = 'decoder_head.2.weight'
+        if decoder_head_key not in state_dict and 'module.' + decoder_head_key in state_dict:
+            decoder_head_key = 'module.' + decoder_head_key
+        clustering_out_dim = state_dict[decoder_head_key].shape[0]
+
+        self.model = FlexTabClustering(clustering_out_dim=clustering_out_dim)
+        if torch.cuda.is_available():
+            self.dtype = torch.bfloat16 if torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16
+            self.model = self.model.to(dtype=self.dtype)
+        else:
+            self.dtype = torch.float32
+
+        self.model.load_weights(state_dict, self.device)
+        self.model.to(self.device).eval()
+
+        self.tokenizer = Tokenizer(sentence_embedder_batch_size=sentence_embedder_batch_size, is_valid=True)
+
+    def fit(self, X: pd.DataFrame, y=None):
+        return self
+
+    @torch.inference_mode()
+    def transform(self, X: pd.DataFrame) -> np.ndarray:
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        if X.shape[1] > self.max_columns:
+            X = X.sample(n=self.max_columns, axis=1, random_state=self.seed)
+
+        if len(X) > self.max_context_size:
+            X = X.sample(n=self.max_context_size, axis=0, random_state=self.seed)
+
+        X = X.reset_index(drop=True)
+        X_query_dummy = X.iloc[:1]
+
+        batch, num_context_rows = self._prepare_batch(X, X_query_dummy)
+        out = self.model(data=batch['data'], num_context_rows=batch['num_context_rows'], task_type=TaskType.CLUSTERING)
+        return out[0, :num_context_rows, :].cpu().float().numpy()
+
+    def _prepare_batch(self, X_context: pd.DataFrame, X_query: pd.DataFrame) -> tuple[dict, int]:
+        num_context_rows = len(X_context)
+        dummy_target = pd.Series(['a'] * num_context_rows, index=X_context.index, name='__dummy_target__')
+
+        data, _ = self.tokenizer(
+            X_context=X_context, y_context=dummy_target, X_query=X_query, task_type=TaskType.CLASSIFICATION
+        )
+
+        # Override target: set ALL rows (context + query) to -100 so they all get the
+        # same mask embedding (index 0), matching context-fm's static target embedding.
+        data['target'][:] = -100
+
+        sample = {
+            'data': data,
+            'num_features': X_context.shape[1],
+            'num_context_rows': num_context_rows,
+        }
+        batch = collate_stack([sample])
+        return to_device(batch, self.device, raise_on_unexpected=False), num_context_rows
+
+    def predict(self, X: pd.DataFrame, n_clusters: int) -> np.ndarray:
+        from sklearn.cluster import KMeans
+
+        embeddings = self.transform(X)
+        return KMeans(n_clusters=n_clusters, n_init=10, random_state=42).fit_predict(embeddings)
+
+
+class FlexTabADModel(BaseEstimator, ABC):
+    """Base class for FlexTabAD anomaly detectors.
+    Handles model loading, tokenization, and inference.
+    Subclasses implement _prepare_batch() to set target labels per their detection mode.
+    """
+
+    def __init__(
+        self,
+        checkpoint: str = 'flextab_ad_v1_0_0.pt',
+        outlier_threshold: float = 0.0,
+        sentence_embedder_batch_size: int = 512,
+        max_context_size: int = 8192,
+        max_columns: int = 250,
+        max_query_size: int = 1024,
+        seed: int = 42,
+    ):
+        self.checkpoint = hf_hub_download(repo_id=HF_REPO_ID, filename=checkpoint)
+        self.outlier_threshold = outlier_threshold
+        self.sentence_embedder_batch_size = sentence_embedder_batch_size
+        self.max_context_size = max_context_size
+        self.max_columns = max_columns
+        self.max_query_size = max_query_size
+        self.seed = seed
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        state_dict = torch.load(self.checkpoint, map_location=self.device, weights_only=True)
+
+        self.model = FlexTabAD(num_row_tokens=1)
+        if torch.cuda.is_available():
+            self.dtype = torch.bfloat16 if torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16
+            self.model = self.model.to(dtype=self.dtype)
+        else:
+            self.dtype = torch.float32
+
+        self.model.load_weights(state_dict, self.device)
+        self.model.to(self.device).eval()
+
+        self.tokenizer = Tokenizer(is_valid=True, sentence_embedder_batch_size=sentence_embedder_batch_size)
+        self.X_train_: None | pd.DataFrame = None
+
+    def fit(self, X: pd.DataFrame, y=None):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+        if X.shape[1] > self.max_columns:
+            X = X.sample(n=self.max_columns, axis=1, random_state=self.seed)
+        if len(X) > self.max_context_size:
+            X = X.sample(n=self.max_context_size, axis=0, random_state=self.seed)
+        self.X_train_ = X.reset_index(drop=True)
+        return self
+
+    def _tokenize(self, X_query: pd.DataFrame) -> tuple[dict, int]:
+        X_train = self.X_train_
+        num_context_rows = len(X_train)
+        num_query_rows = len(X_query)
+        total_rows = num_context_rows + num_query_rows
+        data, _ = self.tokenizer(X_context=X_train, y_context=None, X_query=X_query, task_type=None)
+        data['target'] = torch.full((total_rows,), fill_value=2, dtype=torch.long)
+        return data, num_context_rows
+
+    @abstractmethod
+    def _prepare_batch(self, X_query: pd.DataFrame) -> dict:
+        raise NotImplementedError()
+
+    @torch.inference_mode()
+    def predict_score(self, X_test: pd.DataFrame) -> np.ndarray:
+        if self.X_train_ is None:
+            raise RuntimeError('fit() must be called before predict_score()')
+        if not isinstance(X_test, pd.DataFrame):
+            X_test = pd.DataFrame(X_test)
+        X_test = X_test[self.X_train_.columns]
+
+        if len(X_test) > self.max_query_size:
+            return np.concatenate(
+                [
+                    self.predict_score(X_test.iloc[i : i + self.max_query_size])
+                    for i in range(0, len(X_test), self.max_query_size)
+                ]
+            )
+
+        batch = self._prepare_batch(X_test)
+        out = self.model(
+            data=batch['data'], task_type=TaskType.ANOMALY_DETECTION, num_context_rows=batch['num_context_rows']
+        )
+        return out[0, :, 0].cpu().float().numpy()
+
+    def predict(self, X_test: pd.DataFrame) -> np.ndarray:
+        return (self.predict_score(X_test) >= self.outlier_threshold).astype(int)
+
+
+class FlexTabADUnsupervised(FlexTabADModel):
+    """Unsupervised outlier detector using FlexTabAD.
+
+    All rows (context and query) are treated as unlabelled (target=2).
+    fit(X, y=None): memorizes X_train; y is ignored.
+    predict_score(X_test): raw logit per row — higher means more anomalous.
+    predict(X_test): binary labels (1=outlier) by thresholding predict_score.
+    """
+
+    def _prepare_batch(self, X_query: pd.DataFrame) -> dict:
+        data, num_context_rows = self._tokenize(X_query)
+        sample = {'data': data, 'num_features': self.X_train_.shape[1], 'num_context_rows': num_context_rows}
+        batch = collate_stack([sample])
+        return to_device(batch, self.device, raise_on_unexpected=False)
+
+
+class FlexTabADOneClass(FlexTabADModel):
+    """One-class outlier detector using FlexTabAD.
+
+    All training points are assumed to be non-outliers (target=0).
+    Query rows are unlabelled (target=2).
+    fit(X, y=None): memorizes X_train; y is ignored.
+    predict_score(X_test): raw logit per row — higher means more anomalous.
+    predict(X_test): binary labels (1=outlier) by thresholding predict_score.
+    """
+
+    def _prepare_batch(self, X_query: pd.DataFrame) -> dict:
+        data, num_context_rows = self._tokenize(X_query)
+        data['target'][:num_context_rows] = 0  # context rows → inliers
+        # query rows already set to 2 (unlabelled) by _tokenize
+        sample = {'data': data, 'num_features': self.X_train_.shape[1], 'num_context_rows': num_context_rows}
+        batch = collate_stack([sample])
+        return to_device(batch, self.device, raise_on_unexpected=False)
+
+
+class FlexTabADSemisupervised(FlexTabADModel):
+    """Semi-supervised outlier detector using FlexTabAD.
+
+    External label convention: 0=unlabelled, 1=outlier.
+    Context rows receive their labels; query rows are unlabelled (target=2).
+    fit(X, y): y is required and must follow the external convention.
+    predict_score(X_test): raw logit per row — higher means more anomalous.
+    predict(X_test): binary labels (1=outlier) by thresholding predict_score.
+    """
+
+    def fit(self, X: pd.DataFrame, y):
+        y = np.asarray(y)
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+        if X.shape[1] > self.max_columns:
+            X = X.sample(n=self.max_columns, axis=1, random_state=self.seed)
+        X = X.reset_index(drop=True)
+        if len(X) > self.max_context_size:
+            idx = X.sample(n=self.max_context_size, axis=0, random_state=self.seed).index
+            y = y[idx]
+            X = X.loc[idx].reset_index(drop=True)
+        self.X_train_ = X
+        # external 0=unlabelled → internal 2; external 1=outlier → internal 1
+        self.y_train_ = np.where(y == 0, 2, y).astype(np.int64)
+        return self
+
+    def _prepare_batch(self, X_query: pd.DataFrame) -> dict:
+        data, num_context_rows = self._tokenize(X_query)
+        data['target'][:num_context_rows] = torch.tensor(self.y_train_, dtype=torch.long)
+        # query rows already set to 2 (unlabelled) by _tokenize
+        sample = {'data': data, 'num_features': self.X_train_.shape[1], 'num_context_rows': num_context_rows}
+        batch = collate_stack([sample])
+        return to_device(batch, self.device, raise_on_unexpected=False)
+
+
+class FlexTabRelationalEntityClassifier(FlexTabClassifier):
+    def __init__(self, checkpoint: str = 'flextab_multi_v1_0_0.pt', max_context_size: int = 8192):
+        super().__init__(checkpoint=checkpoint, max_context_size=max_context_size)
+
+    @retry_on_cuda_oom(default_size=1024, param_name='query_chunk_size')
+    @torch.inference_mode()
+    def predict_row_tokens(self, X: pd.DataFrame, query_chunk_size: int = 1024) -> torch.Tensor:
+        """Predict row tokens (embeddings) for the given DataFrame."""
+        check_is_fitted(self)
+        X = self.ensure_dataframe(X)
+        return self._predict_on_chunks(X, 0, query_chunk_size, self._predict_encoder_only)
+
+    def _predict_encoder_only(self, tokenized_data) -> torch.Tensor:
+        """Run encoder only, return query-row embeddings."""
+        tokenized_data['return_encoder_output'] = True
+        return self.model(**tokenized_data).squeeze(0)  # (num_query, row_tokens, hidden)
+
+    def get_column_empty_data(self, total_length: int) -> dict:
+        data = {
+            'text_embeddings': torch.zeros((total_length, 1, self.tokenizer.embedding_dim), dtype=torch.float16),
+            'number_percentile_floor': torch.full((total_length, 1), fill_value=-100, dtype=torch.int64),
+            'number_percentile_delta': torch.zeros((total_length, 1), dtype=torch.float32),
+            'date_year_month_day_weekday': torch.zeros((total_length, 1, 4), dtype=torch.int64),
+            'column_embeddings': torch.zeros((1, self.tokenizer.embedding_dim), dtype=torch.float16),
+        }
+        return data
+
+    @torch.inference_mode()
+    def predict_on_multi_table(
+        self,
+        y_context: pd.Series,
+        encoder_outputs_train: torch.Tensor,
+        encoder_outputs_test: torch.Tensor,
+        query_chunk_size: int = 1024,
+    ) -> np.ndarray:
+        """Run the decoder on pre-computed encoder outputs to get class probabilities."""
+        assert y_context.shape[0] == encoder_outputs_train.shape[0]
+        classes = unique_labels(y_context)
+        all_model_probs = []
+
+        for start_idx in trange(0, len(encoder_outputs_test), query_chunk_size):
+            enc_idx = min(start_idx + query_chunk_size, len(encoder_outputs_test))
+            num_query = enc_idx - start_idx
+            total_length = len(y_context) + num_query
+
+            # Build minimal target-only data (1 column, no features)
+            data = self.get_column_empty_data(total_length)
+            data, label_classes = self.tokenizer.process_target(data, y_context, TaskType.CLASSIFICATION)
+            label_classes = label_classes[y_context.name][np.newaxis, :]
+
+            # Add batch dimension and send to device
+            data_batched = {k: v.unsqueeze(0) for k, v in data.items()}
+            data_batched = to_device(data_batched, self.device, raise_on_unexpected=False)
+
+            # concatenate context encoder outputs with current query chunk of test encoder outputs
+            encoder_outputs = torch.cat([encoder_outputs_train, encoder_outputs_test[start_idx:enc_idx]], dim=0)
+            encoder_outputs = encoder_outputs.unsqueeze(0).to(self.device)
+
+            logits = self.model.forward_decoder_only(
+                data_batched, TaskType.CLASSIFICATION, encoder_outputs, num_context_rows=len(y_context)
+            )
+            logits = logits.squeeze(0)  # (num_query, num_head_outputs)
+
+            _, unordered_preds = self.model.extract_prediction_classification(logits, label_classes)
+
+            test_logits = self.reorder_logits(unordered_preds, label_classes, classes)
+            test_probs = torch.softmax(test_logits, dim=-1).cpu().numpy()
+            all_model_probs.append(test_probs)
+
+        return np.concatenate(all_model_probs, axis=0)
+
+    def get_tables_embeddings(
+        self,
+        train_subgraph_features: dict[str, pd.DataFrame],
+        test_subgraph_features: dict[str, pd.DataFrame],
+        entity_table_name: str,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        """Predict embeddings (row tokens) for both train and test tables."""
+        train_embeddings, test_embeddings = {}, {}
+        ordered = [entity_table_name] + [t for t in train_subgraph_features if t != entity_table_name]
+
+        for table_name in ordered:
+            print('Embedding table:', table_name)
+            train_df = train_subgraph_features[table_name]
+            dummy_target = pd.Series([0] * len(train_df), index=train_df.index, name='target')
+            self.fit(train_df, dummy_target)
+
+            train_embeddings[table_name] = self.predict_row_tokens(train_df)
+            if table_name in test_subgraph_features:
+                test_embeddings[table_name] = self.predict_row_tokens(test_subgraph_features[table_name])
+
+        return train_embeddings, test_embeddings
+
+    def gather_entity_embeddings(
+        self,
+        df: pd.DataFrame,
+        subgraph: dict[str, pd.DataFrame],
+        entity_to_rows: dict[str, dict[tuple, list]],
+        entity_col: str,
+        time_col: str,
+        table_embeddings: dict[str, torch.Tensor],
+        pkey_cols: dict[str, str],
+    ) -> list[torch.Tensor]:
+        """For each row in df, collect embeddings from all tables reached by BFS.
+
+        Returns a list of length N (one per df row), where each element is a
+        tensor of shape (K, 1, emb_dim) - K is the total number of
+        rows reached across all tables for that entity, with no padding yet.
+
+        Args:
+            df               : entity/task DataFrame with entity_col and time_col
+            subgraph         : {table_name: DataFrame} with pkey column intact
+            entity_to_rows   : {table_name: {(entity_id, timestamp): [pkeys]}}
+            entity_col       : name of the entity id column in df
+            time_col         : name of the timestamp column in df
+            table_embeddings : {table_name: (N_rows, 1, emb_dim) tensor}
+            pkey_cols        : {table_name: pkey_column_name} mapping
+        """
+        # Build pkey -> position lookup for each table
+        pkey_to_pos = {}
+        for table_name in table_embeddings:
+            pkey_col_name = pkey_cols[table_name]
+            pkey_to_pos[table_name] = {
+                int(pk): i for i, pk in enumerate(subgraph[table_name][pkey_col_name].astype(int).values)
+            }
+
+        result = []
+        for eid, ts in zip(df[entity_col].values, df[time_col].values):
+            entity_embeddings = []
+            ts = pd.Timestamp(ts)
+            for table_name, embeddings in table_embeddings.items():
+                mapping = entity_to_rows.get(table_name, {})
+                reached_pkeys = mapping.get((int(eid), ts), [])
+                positions = [pkey_to_pos[table_name][p] for p in reached_pkeys if p in pkey_to_pos[table_name]]
+                if positions:
+                    entity_embeddings.append(embeddings[positions])  # (k, num_features, emb_dim)
+            result.append(torch.cat(entity_embeddings, dim=0))
+
+        return result
+
+    def pad_entity_embeddings(self, entity_embs: list[torch.Tensor], max_rows_per_entity: int = 256) -> torch.Tensor:
+        """Pad per-entity embeddings to a fixed-size tensor.
+
+        Returns shape (N, max_rows_per_entity * num_features, emb_dim).
+        """
+        num_features, emb_dim = entity_embs[0].shape[1], entity_embs[0].shape[2]
+        out = torch.zeros((len(entity_embs), max_rows_per_entity, num_features, emb_dim), dtype=entity_embs[0].dtype)
+        for i, emb in enumerate(entity_embs):
+            n = min(len(emb), max_rows_per_entity)
+            out[i, :n] = emb[:n]
+        return out.reshape(-1, max_rows_per_entity * num_features, emb_dim)
+
+    def predict_proba(self, data: RelbenchData) -> np.ndarray:
+        """End-to-end prediction: encode tables, gather entity embeddings, decode.
+
+        Args:
+            data: RelbenchData dataclass from prepare_relbench_dataset()
+
+        Returns:
+            Class probability matrix of shape (n_test, n_classes).
+        """
+        print('\nCall Encoder to get tables embeddings')
+        train_embeddings, test_embeddings = self.get_tables_embeddings(
+            data.train_features, data.test_features, data.entity_table
+        )
+
+        print('\nGather embeddings for each entity row and call Decoder to get predictions')
+        train_entity_embs = self.gather_entity_embeddings(
+            data.train_df,
+            data.train_subgraph,
+            data.train_entity_to_rows,
+            data.entity_col,
+            data.time_col,
+            train_embeddings,
+            data.pkey_cols,
+        )
+        test_entity_embs = self.gather_entity_embeddings(
+            data.test_df,
+            data.test_subgraph,
+            data.test_entity_to_rows,
+            data.entity_col,
+            data.time_col,
+            test_embeddings,
+            data.pkey_cols,
+        )
+
+        train_entity_embs = self.pad_entity_embeddings(train_entity_embs)
+        test_entity_embs = self.pad_entity_embeddings(test_entity_embs)
+
+        target_column = data.train_df.columns[-1]
+        return self.predict_on_multi_table(data.train_df[target_column], train_entity_embs, test_entity_embs)
 
 
 class FlexTabMatcher(FlexTabClassifier):

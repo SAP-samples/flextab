@@ -1,8 +1,9 @@
+import numpy as np
 from sklearn.datasets import load_diabetes
-from sklearn.metrics import accuracy_score, f1_score, r2_score, roc_auc_score
+from sklearn.metrics import accuracy_score, adjusted_rand_score, f1_score, r2_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from flextab.utils.test_utils import _load_and_split_breast_cancer, load_febrl4
+from flextab.utils.test_utils import _load_and_split_breast_cancer, hungarian_accuracy, load_febrl4
 
 
 def test_classification():
@@ -64,6 +65,100 @@ def test_matching():
     print(f'AUROC {roc_auc_score(y_test, probas[:, 1]):.2%}')
 
 
+def test_unsupervised_anomaly_detection():
+    from flextab import FlexTabADUnsupervised
+
+    print('ANOMALY DETECTION')
+
+    X_train, X_test, _, y_test = _load_and_split_breast_cancer(True)
+
+    unsup = FlexTabADUnsupervised()
+
+    unsup.fit(X_train)
+    scores = unsup.predict_score(X_test)
+    print(f'Unsupervised AUROC = {roc_auc_score(y_test, scores):.2%}')
+
+
+def test_oneclass_anomaly_detection():
+    from flextab import FlexTabADOneClass
+
+    X_train, X_test, y_train, y_test = _load_and_split_breast_cancer(True)
+    train_mask = y_train == 0
+    X_train = X_train[train_mask]
+    y_train = y_train[train_mask]
+
+    oneclass = FlexTabADOneClass()
+    oneclass.fit(X_train)
+    scores = oneclass.predict_score(X_test)
+    print(f'One-class AUROC = {roc_auc_score(y_test, scores):.2%}')
+
+
+def test_semisupervised_anomaly_detection():
+    from flextab import FlexTabADSemisupervised, FlexTabClassifier
+
+    LA_RATIOS = [0.01, 0.05, 0.10, 0.50, 1.00]
+
+    flextab = FlexTabClassifier()
+    semisup = FlexTabADSemisupervised()
+    X_train, X_test, y_train, y_test = _load_and_split_breast_cancer(True)
+
+    for la in LA_RATIOS:
+        idx_anomaly_train = np.where(y_train == 1)[0]
+        n_train_anomalies = len(idx_anomaly_train)
+        n_labeled = max(1, int(la * n_train_anomalies)) if n_train_anomalies > 0 else 0
+        these_y_train = np.zeros_like(y_train)
+        these_y_train[idx_anomaly_train[:n_labeled]] = 1
+
+        semisup.fit(X_train, these_y_train)
+        flextab.fit(X_train, these_y_train)
+        semisup_scores = semisup.predict_score(X_test)
+        flextab_scores = flextab.predict_proba(X_test)[:, 1]
+        semisup_auroc = roc_auc_score(y_test, semisup_scores)
+        flextab_auroc = roc_auc_score(y_test, flextab_scores)
+
+        print(
+            f'Semi-supervised la={la:.0%} ({n_labeled}/{n_train_anomalies} annotated): FlexTab AUROC = {flextab_auroc:.2%}, FlexTab-AD AUROC = {semisup_auroc:.2%}'
+        )
+
+
+def test_clustering():
+    from sklearn.datasets import load_breast_cancer
+
+    from flextab import FlexTabClusterer
+
+    print('\nCLUSTERING')
+
+    X, y = load_breast_cancer(return_X_y=True)
+    n_clusters = len(np.unique(y))
+
+    clusterer = FlexTabClusterer()
+    pred = clusterer.fit(X).predict(X, n_clusters=n_clusters)
+
+    acc = hungarian_accuracy(y, pred)
+    ari = adjusted_rand_score(y, pred)
+    print(f'Hungarian Accuracy: {acc:.2%}')
+    print(f'ARI: {ari:.2%}')
+
+
+def test_multi_table():
+    from flextab import FlexTabRelationalEntityClassifier
+    from flextab.flextab_multi.relbench_data import prepare_relbench_dataset
+
+    print('\nMULTI-TABLE')
+
+    rb_dataset = 'rel-f1'
+    rb_task = 'driver-dnf'
+    prepared_data = prepare_relbench_dataset(rb_dataset, rb_task, decoder_context_size=16384, query_size=-1)
+
+    flextab_multi = FlexTabRelationalEntityClassifier()
+    all_model_probs = flextab_multi.predict_proba(prepared_data)
+
+    all_model_probs = all_model_probs[:, 1]  # probability of the positive class
+    target_column = prepared_data.train_df.columns[-1]
+    auroc = roc_auc_score(prepared_data.test_df[target_column], all_model_probs)
+    print(f'\nFlexTab-Multi AUROC = {auroc:.1%} for Relbench dataset "{rb_dataset}" task "{rb_task}"')
+
+
 def test_embedding():
     from sklearn.datasets import load_breast_cancer
 
@@ -105,3 +200,8 @@ if __name__ == '__main__':
     test_regression()
     test_matching()
     test_embedding()
+    test_unsupervised_anomaly_detection()
+    test_oneclass_anomaly_detection()
+    test_semisupervised_anomaly_detection()
+    test_clustering()
+    test_multi_table()

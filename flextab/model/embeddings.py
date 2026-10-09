@@ -166,20 +166,25 @@ class CellEmbeddings(nn.Module):
         unsqueezed = input_dict['column_embeddings'].unsqueeze(1)  # (batch_size, 1, cols, embed_dim)
         input_embeds += self.column_remapping(unsqueezed.type(self.column_remapping.weight.dtype))
 
-        # FlexTab path: zero out text embeddings for target (last column)
-        text_embeddings = torch.cat(
-            [input_dict['text_embeddings'][:, :, :-1], torch.zeros_like(input_dict['text_embeddings'][:, :, -1:])],
-            dim=2,
-        ).type(self.content_remapping.weight.dtype)
+        if task_type == TaskType.ANOMALY_DETECTION:
+            # FlexTabAD path: no target column, embed all columns as features
+            text_embeddings = input_dict['text_embeddings'].type(self.content_remapping.weight.dtype)
+        else:
+            # FlexTab path: zero out text embeddings for target (last column)
+            text_embeddings = torch.cat(
+                [input_dict['text_embeddings'][:, :, :-1], torch.zeros_like(input_dict['text_embeddings'][:, :, -1:])],
+                dim=2,
+            ).type(self.content_remapping.weight.dtype)
 
         content_embeds = self.content_remapping(text_embeddings)
         input_embeds += content_embeds
         del content_embeds
 
-        is_classification = task_type == TaskType.CLASSIFICATION
-        input_embeds[:, :, -1] += self.get_target_embeddings(
-            input_dict['target'], input_dict['target_delta'], is_classification, input_embeds.dtype
-        )
+        if task_type != TaskType.ANOMALY_DETECTION:
+            is_classification = task_type == TaskType.CLASSIFICATION
+            input_embeds[:, :, -1] += self.get_target_embeddings(
+                input_dict['target'], input_dict['target_delta'], is_classification, input_embeds.dtype
+            )
 
         input_embeds = self.layer_norm(input_embeds)
         input_embeds = self.dropout(input_embeds)

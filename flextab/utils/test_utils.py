@@ -158,3 +158,15 @@ def _load_and_split_breast_cancer(invert_y=False):
         # For anomaly detection, the sklearn dataset uses a different convention 0 = anomaly.
         y = 1 - y
     return train_test_split(X, y, test_size=0.5, random_state=42)
+
+
+def hungarian_accuracy(y_true, pred):
+    import numpy as np
+    from scipy.optimize import linear_sum_assignment
+    from sklearn.metrics import confusion_matrix
+
+    K = max(len(np.unique(pred)), int(y_true.max()) + 1)
+    conf = confusion_matrix(y_true, pred, labels=range(K))
+    col_ind = np.argsort(linear_sum_assignment(-conf)[1])
+    matched = col_ind[pred]
+    return float((matched == y_true).mean())
