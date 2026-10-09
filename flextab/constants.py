@@ -36,3 +36,4 @@ class TaskType(StrEnum):
     MATCHING = 'matching'
     ANOMALY_DETECTION = 'anomaly_detection'
     CLUSTERING = 'clustering'
+    MULTI_TABLE = 'multi_table'
