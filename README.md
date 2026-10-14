@@ -182,6 +182,4 @@ No known issues
 If you wish to contribute code, offer fixes or improvements, please send a pull request. Due to legal reasons, contributors will be asked to accept a DCO when they create the first pull request to this project. This happens in an automated fashion during the submission process. SAP uses [the standard DCO text of the Linux Foundation](https://developercertificate.org/).
 
 ## License
-Copyright (c) 2026 SAP SE or an SAP affiliate company. All rights reserved.
-
-The source code in this project is released under the Apache License 2.0 (see [LICENSE](LICENSE)). The model checkpoints are released under the CC-BY-NC-4.0 license.
+Copyright 2026 SAP SE or an SAP affiliate company and flextab contributors. Please see our [LICENSE](LICENSE) for copyright and license information. Detailed information including third-party components and their licensing/copyright information is available [via the REUSE tool](https://api.reuse.software/info/github.com/SAP-samples/flextab).
